@@ -11,7 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 
 @RestController
-@RequestMapping("/api/pedidos")
+@RequestMapping("/api")
 public class OrderController {
     private final AtomicLong ids = new AtomicLong();
     private final List<OrderResponse> orders = new CopyOnWriteArrayList<>();
