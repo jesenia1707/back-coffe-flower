@@ -1,10 +1,9 @@
 package com.coffeeflower.bff.controller;
 
 import com.coffeeflower.bff.service.InformeComprasService;
-
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.http.HttpStatus;
 
 import java.util.Map;
 
@@ -19,22 +18,31 @@ public class InformeComprasController {
         this.informeService = informeService;
     }
 
-    @PostMapping("/compras")
-    public ResponseEntity<?> generarInforme() {
+    /**
+     * Genera el PDF del mes actual y lo envía por correo.
+     */
+    @PostMapping({
+            "/ventas-mensuales",
+            "/compras"
+    })
+    public ResponseEntity<?> generarInformeMensual() {
         try {
-            int cantidad = informeService.generarYEnviar();
+            int cantidadPedidos = informeService.generarYEnviar();
 
             return ResponseEntity.ok(Map.of(
-                    "mensaje", "Informe PDF enviado correctamente al correo.",
-                    "cantidadPedidos", cantidad));
+                    "mensaje",
+                    "Informe mensual generado y enviado correctamente.",
+                    "cantidadPedidos",
+                    cantidadPedidos));
 
         } catch (Exception e) {
-            // El detalle queda en el servidor; no exponer
-            // credenciales ni errores internos al navegador.
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            e.printStackTrace();
+
+            return ResponseEntity
+                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of(
                             "mensaje",
-                            "No se pudo generar o enviar el informe."));
+                            "No se pudo generar o enviar el informe mensual."));
         }
     }
 }
