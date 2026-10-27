@@ -1,7 +1,7 @@
 package com.coffeeflower.bff.service;
 
 import com.coffeeflower.bff.model.PedidoEntity;
-import com.coffeeflower.bff.model.PedidoItemEntity;s
+import com.coffeeflower.bff.model.PedidoItemEntity;
 import com.coffeeflower.bff.repository.PedidoRepository;
 import com.coffeeflower.bff.repository.PedidoItemRepository;
 import jakarta.transaction.Transactional;
