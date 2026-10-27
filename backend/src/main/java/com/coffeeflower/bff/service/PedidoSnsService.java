@@ -15,7 +15,7 @@ public class PedidoSnsService {
     private final SnsClient snsClient;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.aws.sns.topic-arn:}")
+    @Value("${SNS_TOPIC_ARN:}")
     private String topicArn;
 
     public PedidoSnsService(
