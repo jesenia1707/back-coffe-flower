@@ -1,23 +1,30 @@
 package com.coffeeflower.bff.service;
 
 import com.coffeeflower.bff.model.PedidoEntity;
-import com.coffeeflower.bff.model.PedidoItemEntity;
+import com.coffeeflower.bff.model.PedidoItemEntity;s
 import com.coffeeflower.bff.repository.PedidoRepository;
+import com.coffeeflower.bff.repository.PedidoItemRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @Service
 public class PedidoService {
 
     private final PedidoRepository pedidoRepository;
+    private final PedidoItemRepository pedidoItemRepository;
     private final PedidoSnsService pedidoSnsService;
 
     public PedidoService(
             PedidoRepository pedidoRepository,
+            PedidoItemRepository pedidoItemRepository,
             PedidoSnsService pedidoSnsService) {
         this.pedidoRepository = pedidoRepository;
+        this.pedidoItemRepository = pedidoItemRepository;
         this.pedidoSnsService = pedidoSnsService;
     }
 
@@ -25,7 +32,7 @@ public class PedidoService {
     public PedidoEntity crearPedido(
             String cliente,
             List<PedidoItemEntity> items,
-            java.math.BigDecimal total) {
+            BigDecimal total) {
 
         if (cliente == null || cliente.isBlank()) {
             throw new IllegalArgumentException(
@@ -47,15 +54,25 @@ public class PedidoService {
         pedido.setTotal(total);
         pedido.setEstado("RECIBIDO");
 
-        PedidoEntity guardado = pedidoRepository.save(pedido);
+        // Guardar el pedido principal.
+        PedidoEntity guardado = pedidoRepository.saveAndFlush(pedido);
 
+        // Asociar los productos al pedido.
         for (PedidoItemEntity item : items) {
             item.setPedido(guardado);
         }
 
-        // Próximo paso: guardar los detalles del pedido.
-        // También configuraremos el envío a SNS después de confirmar
-        // que el pedido y sus detalles se guardan correctamente.
+        // Guardar los detalles.
+        pedidoItemRepository.saveAll(items);
+
+        // Publicar el evento SNS después de confirmar la transacción.
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        pedidoSnsService.publicarPedido(guardado);
+                    }
+                });
 
         return guardado;
     }
