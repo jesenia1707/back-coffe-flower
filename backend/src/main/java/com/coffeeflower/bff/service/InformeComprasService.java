@@ -6,10 +6,12 @@ import com.coffeeflower.bff.repository.PedidoItemRepository;
 import com.coffeeflower.bff.repository.PedidoRepository;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.PublishRequest;
+import software.amazon.awssdk.services.sns.model.PublishResponse;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -27,31 +29,33 @@ public class InformeComprasService {
 
         private final PedidoRepository pedidoRepository;
         private final PedidoItemRepository itemRepository;
-        private final JavaMailSender mailSender;
+        private final SnsClient snsClient;
 
-        @Value("${app.report.email}")
-        private String correoDestino;
-
-        @Value("${spring.mail.username}")
-        private String correoRemitente;
+        @Value("${AWS_SNS_TOPIC_ARN:${SNS_TOPIC_ARN:}}")
+        private String topicArn;
 
         public InformeComprasService(
                         PedidoRepository pedidoRepository,
                         PedidoItemRepository itemRepository,
-                        JavaMailSender mailSender) {
+                        SnsClient snsClient) {
 
                 this.pedidoRepository = pedidoRepository;
                 this.itemRepository = itemRepository;
-                this.mailSender = mailSender;
+                this.snsClient = snsClient;
         }
 
         /**
-         * Calcula las ventas del mes actual y envía
-         * el informe directamente en el cuerpo del correo.
+         * Calcula las ventas del mes actual y publica
+         * el informe como mensaje de Amazon SNS.
          */
         @Transactional(readOnly = true)
         public Map<String, Object> generarYEnviarInformeMensual()
                         throws Exception {
+
+                if (topicArn == null || topicArn.isBlank()) {
+                        throw new IllegalStateException(
+                                        "Falta configurar AWS_SNS_TOPIC_ARN.");
+                }
 
                 LocalDate hoy = LocalDate.now(ZONA_CHILE);
                 LocalDate inicioMes = hoy.withDayOfMonth(1);
@@ -65,13 +69,11 @@ public class InformeComprasService {
                                 .atStartOfDay(ZONA_CHILE)
                                 .toInstant();
 
-                // Obtener los pedidos del mes actual.
                 List<PedidoEntity> pedidosMes = pedidoRepository.findAll()
                                 .stream()
                                 .filter(pedido -> pedido.getCreadoEn() != null)
                                 .filter(pedido -> {
                                         Instant fecha = pedido.getCreadoEn();
-
                                         return !fecha.isBefore(desde)
                                                         && fecha.isBefore(hasta);
                                 })
@@ -80,13 +82,11 @@ public class InformeComprasService {
                                                                 && !pedido.getEstado().equalsIgnoreCase("CANCELLED")))
                                 .toList();
 
-                // Calcular el total de ventas.
                 BigDecimal totalVentas = pedidosMes.stream()
                                 .map(PedidoEntity::getTotal)
                                 .filter(total -> total != null)
                                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-                // Calcular las unidades vendidas.
                 int totalUnidades = 0;
 
                 for (PedidoEntity pedido : pedidosMes) {
@@ -106,7 +106,6 @@ public class InformeComprasService {
                                 .stripTrailingZeros()
                                 .toPlainString();
 
-                // Construir el informe en texto.
                 String cuerpo = """
                                 COFFEE FLOWER
                                 INFORME MENSUAL DE VENTAS
@@ -131,35 +130,30 @@ public class InformeComprasService {
                                 totalUnidades,
                                 totalFormateado);
 
-                // Enviar el informe por correo.
-                SimpleMailMessage mensaje = new SimpleMailMessage();
+                PublishRequest solicitud = PublishRequest.builder()
+                                .topicArn(topicArn)
+                                .subject("Coffee Flower - Informe mensual de ventas - "
+                                                + periodo)
+                                .message(cuerpo)
+                                .build();
 
-                mensaje.setFrom(correoRemitente);
-                mensaje.setTo(correoDestino);
-                mensaje.setSubject(
-                                "Coffee Flower - Informe mensual de ventas - "
-                                                + periodo);
-                mensaje.setText(cuerpo);
+                PublishResponse respuesta = snsClient.publish(solicitud);
 
-                mailSender.send(mensaje);
-
-                // Devolver los resultados al controlador.
                 Map<String, Object> resultado = new HashMap<>();
-
                 resultado.put(
                                 "mensaje",
-                                "Informe mensual enviado correctamente al correo.");
+                                "Informe mensual publicado correctamente en Amazon SNS.");
                 resultado.put("periodo", periodo);
                 resultado.put("cantidadPedidos", pedidosMes.size());
                 resultado.put("unidadesVendidas", totalUnidades);
                 resultado.put("totalVentas", totalVentas);
-                resultado.put("correoDestino", correoDestino);
+                resultado.put("snsMessageId", respuesta.messageId());
 
                 return resultado;
         }
 
         /**
-         * Compatibilidad con controladores que utilizan generarYEnviar().
+         * Compatibilidad con controladores que usan generarYEnviar().
          */
         @Transactional(readOnly = true)
         public int generarYEnviar() throws Exception {
