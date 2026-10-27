@@ -14,18 +14,22 @@ import software.amazon.awssdk.services.sns.model.PublishRequest;
 import software.amazon.awssdk.services.sns.model.PublishResponse;
 
 import java.math.BigDecimal;
+import java.text.NumberFormat;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
 public class InformeComprasService {
 
         private static final ZoneId ZONA_CHILE = ZoneId.of("America/Santiago");
+
+        private static final DateTimeFormatter FORMATO_FECHA = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
         private final PedidoRepository pedidoRepository;
         private final PedidoItemRepository itemRepository;
@@ -46,7 +50,7 @@ public class InformeComprasService {
 
         /**
          * Calcula las ventas del mes actual y publica
-         * el informe como mensaje de Amazon SNS.
+         * el informe mediante Amazon SNS.
          */
         @Transactional(readOnly = true)
         public Map<String, Object> generarYEnviarInformeMensual()
@@ -99,41 +103,51 @@ public class InformeComprasService {
                                         .sum();
                 }
 
+                NumberFormat formatoCLP = NumberFormat.getNumberInstance(Locale.forLanguageTag("es-CL"));
+
+                formatoCLP.setMaximumFractionDigits(0);
+                formatoCLP.setMinimumFractionDigits(0);
+
+                String totalFormateado = formatoCLP.format(totalVentas);
+
                 String periodo = inicioMes.format(
                                 DateTimeFormatter.ofPattern("MM/yyyy"));
 
-                String totalFormateado = totalVentas
-                                .stripTrailingZeros()
-                                .toPlainString();
-
                 String cuerpo = """
-                                COFFEE FLOWER
+                                ☕ COFFEE FLOWER
                                 INFORME MENSUAL DE VENTAS
+                                ========================================
 
-                                Periodo: %s al %s
+                                PERÍODO DEL INFORME
+                                Desde: %s
+                                Hasta: %s
 
                                 RESUMEN DE VENTAS
-                                --------------------------------
-                                Pedidos registrados: %d
-                                Unidades vendidas: %d
-                                Total de ventas: $%s CLP
+                                ----------------------------------------
+                                Pedidos registrados : %d
+                                Unidades vendidas   : %d
+                                Total de ventas     : $%s CLP
 
-                                Este informe contiene los pedidos
-                                registrados durante el mes.
+                                ========================================
 
-                                Saludos,
-                                Coffee Flower
+                                Este informe contiene el resumen de los
+                                pedidos registrados durante el período.
+
+                                Gracias por confiar en Coffee Flower.
+
+                                Equipo Coffee Flower
                                 """.formatted(
-                                inicioMes,
-                                hoy,
+                                inicioMes.format(FORMATO_FECHA),
+                                hoy.format(FORMATO_FECHA),
                                 pedidosMes.size(),
                                 totalUnidades,
                                 totalFormateado);
 
                 PublishRequest solicitud = PublishRequest.builder()
                                 .topicArn(topicArn)
-                                .subject("Coffee Flower - Informe mensual de ventas - "
-                                                + periodo)
+                                .subject(
+                                                "Coffee Flower - Informe mensual de ventas - "
+                                                                + periodo)
                                 .message(cuerpo)
                                 .build();
 
@@ -159,7 +173,6 @@ public class InformeComprasService {
         public int generarYEnviar() throws Exception {
                 Map<String, Object> resultado = generarYEnviarInformeMensual();
 
-                return ((Number) resultado.get("cantidadPedidos"))
-                                .intValue();
+                return ((Number) resultado.get("cantidadPedidos")).intValue();
         }
 }
