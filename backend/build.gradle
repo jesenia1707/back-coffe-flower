@@ -24,6 +24,8 @@ dependencies {
     // AWS SDK v2 para SNS
     implementation platform('software.amazon.awssdk:bom:2.34.0')
     implementation 'software.amazon.awssdk:sns'
+    implementation 'org.springframework.boot:spring-boot-starter-mail'
+    implementation 'org.apache.pdfbox:pdfbox:3.0.5'
 
     runtimeOnly 'org.postgresql:postgresql'
 

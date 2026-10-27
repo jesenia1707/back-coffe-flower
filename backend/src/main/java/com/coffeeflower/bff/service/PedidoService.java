@@ -1,3 +1,4 @@
+
 package com.coffeeflower.bff.service;
 
 import com.coffeeflower.bff.model.PedidoEntity;
@@ -14,7 +15,9 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class PedidoService {
@@ -41,7 +44,6 @@ public class PedidoService {
             List<PedidoItemEntity> items,
             BigDecimal total) {
 
-        // Validar los datos recibidos.
         if (cliente == null || cliente.isBlank()) {
             throw new IllegalArgumentException(
                     "El nombre del cliente es obligatorio");
@@ -57,7 +59,6 @@ public class PedidoService {
                     "El total del pedido no es válido");
         }
 
-        // Crear y guardar el pedido principal.
         PedidoEntity pedido = new PedidoEntity();
         pedido.setCliente(cliente.trim());
         pedido.setTotal(total);
@@ -65,7 +66,6 @@ public class PedidoService {
 
         PedidoEntity guardado = pedidoRepository.saveAndFlush(pedido);
 
-        // Asociar cada producto al pedido.
         for (PedidoItemEntity item : items) {
             if (item == null) {
                 throw new IllegalArgumentException(
@@ -75,23 +75,42 @@ public class PedidoService {
             item.setPedido(guardado);
         }
 
-        // Guardar los detalles del pedido.
-        pedidoItemRepository.saveAll(items);
+        List<PedidoItemEntity> itemsGuardados = pedidoItemRepository.saveAll(items);
+
         pedidoItemRepository.flush();
 
-        // Publicar en SNS únicamente después de confirmar
-        // la transacción de base de datos.
+        // Construir el evento mientras los datos están disponibles.
+        Map<String, Object> eventoPedido = new LinkedHashMap<>();
+        eventoPedido.put("id", guardado.getId());
+        eventoPedido.put("cliente", guardado.getCliente());
+        eventoPedido.put("total", guardado.getTotal());
+        eventoPedido.put("estado", guardado.getEstado());
+        eventoPedido.put("creadoEn", guardado.getCreadoEn());
+
+        List<Map<String, Object>> productos = itemsGuardados.stream()
+                .map(item -> {
+                    Map<String, Object> producto = new LinkedHashMap<>();
+                    producto.put("productoId", item.getProductoId());
+                    producto.put("nombre", item.getNombre());
+                    producto.put("cantidad", item.getCantidad());
+                    producto.put("precio", item.getPrecio());
+                    return producto;
+                })
+                .toList();
+
+        eventoPedido.put("items", productos);
+
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
-
                     @Override
                     public void afterCommit() {
                         try {
-                            pedidoSnsService.publicarPedido(guardado);
+                            pedidoSnsService.publicarPedido(eventoPedido);
 
                             log.info(
-                                    "Evento SNS publicado para el pedido {}",
-                                    guardado.getId());
+                                    "Evento SNS publicado para el pedido {} con {} productos",
+                                    guardado.getId(),
+                                    productos.size());
 
                         } catch (Exception e) {
                             log.error(
