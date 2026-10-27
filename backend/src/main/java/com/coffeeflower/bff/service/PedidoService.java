@@ -4,7 +4,11 @@ import com.coffeeflower.bff.model.PedidoEntity;
 import com.coffeeflower.bff.model.PedidoItemEntity;
 import com.coffeeflower.bff.repository.PedidoRepository;
 import com.coffeeflower.bff.repository.PedidoItemRepository;
+
 import jakarta.transaction.Transactional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -15,6 +19,8 @@ import java.util.List;
 @Service
 public class PedidoService {
 
+    private static final Logger log = LoggerFactory.getLogger(PedidoService.class);
+
     private final PedidoRepository pedidoRepository;
     private final PedidoItemRepository pedidoItemRepository;
     private final PedidoSnsService pedidoSnsService;
@@ -23,6 +29,7 @@ public class PedidoService {
             PedidoRepository pedidoRepository,
             PedidoItemRepository pedidoItemRepository,
             PedidoSnsService pedidoSnsService) {
+
         this.pedidoRepository = pedidoRepository;
         this.pedidoItemRepository = pedidoItemRepository;
         this.pedidoSnsService = pedidoSnsService;
@@ -34,6 +41,7 @@ public class PedidoService {
             List<PedidoItemEntity> items,
             BigDecimal total) {
 
+        // Validar los datos recibidos.
         if (cliente == null || cliente.isBlank()) {
             throw new IllegalArgumentException(
                     "El nombre del cliente es obligatorio");
@@ -41,7 +49,7 @@ public class PedidoService {
 
         if (items == null || items.isEmpty()) {
             throw new IllegalArgumentException(
-                    "El pedido debe contener productos");
+                    "El pedido debe contener al menos un producto");
         }
 
         if (total == null || total.signum() < 0) {
@@ -49,28 +57,48 @@ public class PedidoService {
                     "El total del pedido no es válido");
         }
 
+        // Crear y guardar el pedido principal.
         PedidoEntity pedido = new PedidoEntity();
-        pedido.setCliente(cliente);
+        pedido.setCliente(cliente.trim());
         pedido.setTotal(total);
         pedido.setEstado("RECIBIDO");
 
-        // Guardar el pedido principal.
         PedidoEntity guardado = pedidoRepository.saveAndFlush(pedido);
 
-        // Asociar los productos al pedido.
+        // Asociar cada producto al pedido.
         for (PedidoItemEntity item : items) {
+            if (item == null) {
+                throw new IllegalArgumentException(
+                        "El pedido contiene un producto inválido");
+            }
+
             item.setPedido(guardado);
         }
 
-        // Guardar los detalles.
+        // Guardar los detalles del pedido.
         pedidoItemRepository.saveAll(items);
+        pedidoItemRepository.flush();
 
-        // Publicar el evento SNS después de confirmar la transacción.
+        // Publicar en SNS únicamente después de confirmar
+        // la transacción de base de datos.
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
+
                     @Override
                     public void afterCommit() {
-                        pedidoSnsService.publicarPedido(guardado);
+                        try {
+                            pedidoSnsService.publicarPedido(guardado);
+
+                            log.info(
+                                    "Evento SNS publicado para el pedido {}",
+                                    guardado.getId());
+
+                        } catch (Exception e) {
+                            log.error(
+                                    "El pedido {} se guardó, pero falló la publicación en SNS",
+                                    guardado.getId(),
+                                    e);
+                        }
                     }
                 });
 
