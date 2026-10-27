@@ -3,7 +3,9 @@ package com.coffeeflower.bff.controller;
 import com.coffeeflower.bff.service.InformeComprasService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
@@ -18,22 +20,18 @@ public class InformeComprasController {
         this.informeService = informeService;
     }
 
-    /**
-     * Genera el PDF del mes actual y lo envía por correo.
-     */
-    @PostMapping({
-            "/ventas-mensuales",
-            "/compras"
-    })
+    @PostMapping("/compras")
     public ResponseEntity<?> generarInformeMensual() {
         try {
             int cantidadPedidos = informeService.generarYEnviar();
 
-            return ResponseEntity.ok(Map.of(
+            Map<String, Object> resultado = Map.of(
                     "mensaje",
                     "Informe mensual generado y enviado correctamente.",
                     "cantidadPedidos",
-                    cantidadPedidos));
+                    cantidadPedidos);
+
+            return ResponseEntity.ok(resultado);
 
         } catch (Exception e) {
             e.printStackTrace();
