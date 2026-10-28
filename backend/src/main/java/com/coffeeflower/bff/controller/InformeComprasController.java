@@ -1,3 +1,4 @@
+
 package com.coffeeflower.bff.controller;
 
 import com.coffeeflower.bff.service.InformeComprasService;
@@ -21,15 +22,9 @@ public class InformeComprasController {
     }
 
     @PostMapping("/compras")
-    public ResponseEntity<?> generarInformeMensual() {
+    public ResponseEntity<Map<String, Object>> generarInformeMensual() {
         try {
-            int cantidadPedidos = informeService.generarYEnviar();
-
-            Map<String, Object> resultado = Map.of(
-                    "mensaje",
-                    "Informe mensual generado y enviado correctamente.",
-                    "cantidadPedidos",
-                    cantidadPedidos);
+            Map<String, Object> resultado = informeService.generarYEnviarInformeMensual();
 
             return ResponseEntity.ok(resultado);
 
@@ -40,7 +35,11 @@ public class InformeComprasController {
                     .status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of(
                             "mensaje",
-                            "No se pudo generar o enviar el informe mensual."));
+                            "No se pudo generar o enviar el informe mensual.",
+                            "error",
+                            e.getMessage() != null
+                                    ? e.getMessage()
+                                    : "Error interno del servidor."));
         }
     }
 }
