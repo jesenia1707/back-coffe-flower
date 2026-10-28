@@ -1,10 +1,12 @@
-
 package com.coffeeflower.bff.service;
 
 import com.coffeeflower.bff.model.PedidoEntity;
 import com.coffeeflower.bff.model.PedidoItemEntity;
 import com.coffeeflower.bff.repository.PedidoItemRepository;
 import com.coffeeflower.bff.repository.PedidoRepository;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -37,6 +39,7 @@ public class InformeComprasService {
         private final PedidoRepository pedidoRepository;
         private final PedidoItemRepository itemRepository;
         private final SnsClient snsClient;
+        private final ObjectMapper objectMapper;
 
         @Value("${AWS_SNS_TOPIC_ARN:${SNS_TOPIC_ARN:}}")
         private String topicArn;
@@ -44,28 +47,30 @@ public class InformeComprasService {
         public InformeComprasService(
                         PedidoRepository pedidoRepository,
                         PedidoItemRepository itemRepository,
-                        SnsClient snsClient) {
+                        SnsClient snsClient,
+                        ObjectMapper objectMapper) {
 
                 this.pedidoRepository = pedidoRepository;
                 this.itemRepository = itemRepository;
                 this.snsClient = snsClient;
+                this.objectMapper = objectMapper;
         }
 
         /**
-         * Calcula las ventas del mes actual
-         * y publica el informe como texto plano mediante Amazon SNS.
+         * Calcula las ventas del mes actual y publica una solicitud
+         * JSON en Amazon SNS para el procesamiento del informe.
          */
         @Transactional(readOnly = true)
         public Map<String, Object> generarYEnviarInformeMensual()
                         throws Exception {
 
-                // 1. Verificar configuracion de SNS
+                // 1. Verificar la configuración de SNS.
                 if (topicArn == null || topicArn.isBlank()) {
                         throw new IllegalStateException(
                                         "Falta configurar AWS_SNS_TOPIC_ARN.");
                 }
 
-                // 2. Obtener fechas del mes actual
+                // 2. Obtener las fechas del mes actual.
                 LocalDate hoy = LocalDate.now(ZONA_CHILE);
                 LocalDate inicioMes = hoy.withDayOfMonth(1);
                 LocalDate inicioMesSiguiente = inicioMes.plusMonths(1);
@@ -78,7 +83,7 @@ public class InformeComprasService {
                                 .atStartOfDay(ZONA_CHILE)
                                 .toInstant();
 
-                // 3. Obtener pedidos del mes
+                // 3. Obtener los pedidos del mes.
                 List<PedidoEntity> pedidosMes = pedidoRepository.findAll()
                                 .stream()
                                 .filter(pedido -> pedido.getCreadoEn() != null)
@@ -95,17 +100,16 @@ public class InformeComprasService {
                                                                                 .equalsIgnoreCase("CANCELLED")))
                                 .toList();
 
-                // 4. Calcular total de ventas
+                // 4. Calcular el total de ventas.
                 BigDecimal totalVentas = pedidosMes.stream()
                                 .map(PedidoEntity::getTotal)
                                 .filter(total -> total != null)
                                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-                // 5. Calcular unidades vendidas
+                // 5. Calcular las unidades vendidas.
                 int totalUnidades = 0;
 
                 for (PedidoEntity pedido : pedidosMes) {
-
                         List<PedidoItemEntity> items = itemRepository.findByPedidoId(pedido.getId());
 
                         totalUnidades += items.stream()
@@ -115,7 +119,7 @@ public class InformeComprasService {
                                         .sum();
                 }
 
-                // 6. Formatear valores en pesos chilenos
+                // 6. Formatear los valores en pesos chilenos.
                 NumberFormat formatoCLP = NumberFormat.getNumberInstance(
                                 Locale.forLanguageTag("es-CL"));
 
@@ -128,7 +132,8 @@ public class InformeComprasService {
                 String fechaInicio = inicioMes.format(FORMATO_FECHA);
                 String fechaFin = hoy.format(FORMATO_FECHA);
 
-                // 7. Construir el informe en texto plano
+                // 7. Construir el informe actual para conservar
+                // el cálculo y los datos que devuelve el endpoint.
                 String cuerpoTexto = """
                                 COFFEE FLOWER
                                 INFORME MENSUAL DE VENTAS
@@ -155,23 +160,44 @@ public class InformeComprasService {
                                 fechaInicio,
                                 fechaFin);
 
-                // 8. Publicar directamente el texto plano en Amazon SNS
+                // 8. Construir el JSON que espera la Lambda.
+                Map<String, Object> body = new HashMap<>();
+                body.put("reportType", "monthly");
+                body.put("periodo", periodo);
+                body.put("fechaInicio", fechaInicio);
+                body.put("fechaFin", fechaFin);
+
+                Map<String, Object> mensajeJson = new HashMap<>();
+                mensajeJson.put("type", "report.requested");
+                mensajeJson.put("body", body);
+
+                String mensajeSerializado;
+
+                try {
+                        mensajeSerializado = objectMapper.writeValueAsString(mensajeJson);
+                } catch (JsonProcessingException e) {
+                        throw new IllegalStateException(
+                                        "No fue posible serializar la solicitud del informe.",
+                                        e);
+                }
+
+                // 9. Publicar la solicitud JSON en Amazon SNS.
                 PublishRequest solicitud = PublishRequest.builder()
                                 .topicArn(topicArn)
                                 .subject(
-                                                "Coffee Flower - Informe mensual de ventas - "
+                                                "Coffee Flower - Solicitud de informe mensual - "
                                                                 + periodo)
-                                .message(cuerpoTexto)
+                                .message(mensajeSerializado)
                                 .build();
 
                 PublishResponse respuesta = snsClient.publish(solicitud);
 
-                // 9. Crear respuesta del endpoint
+                // 10. Crear la respuesta del endpoint.
                 Map<String, Object> resultado = new HashMap<>();
 
                 resultado.put(
                                 "mensaje",
-                                "Informe mensual publicado correctamente en Amazon SNS.");
+                                "Solicitud de informe publicada correctamente en Amazon SNS.");
 
                 resultado.put("periodo", periodo);
                 resultado.put("cantidadPedidos", pedidosMes.size());
@@ -183,15 +209,12 @@ public class InformeComprasService {
         }
 
         /**
-         * Compatibilidad con controladores
-         * que utilizan generarYEnviar().
+         * Compatibilidad con controladores que utilizan generarYEnviar().
          */
         @Transactional(readOnly = true)
         public int generarYEnviar() throws Exception {
-
                 Map<String, Object> resultado = generarYEnviarInformeMensual();
 
-                return ((Number) resultado.get(
-                                "cantidadPedidos")).intValue();
+                return ((Number) resultado.get("cantidadPedidos")).intValue();
         }
 }
