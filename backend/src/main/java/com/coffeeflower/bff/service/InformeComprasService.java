@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class InformeComprasService {
@@ -57,8 +58,8 @@ public class InformeComprasService {
         }
 
         /**
-         * Calcula las ventas del mes actual y publica una solicitud
-         * JSON en Amazon SNS para el procesamiento del informe.
+         * Calcula el resumen mensual de ventas y publica una solicitud
+         * JSON en SNS para que la Lambda genere y envíe el informe.
          */
         @Transactional(readOnly = true)
         public Map<String, Object> generarYEnviarInformeMensual()
@@ -70,7 +71,7 @@ public class InformeComprasService {
                                         "Falta configurar AWS_SNS_TOPIC_ARN.");
                 }
 
-                // 2. Obtener las fechas del mes actual.
+                // 2. Definir el periodo mensual en la zona horaria de Chile.
                 LocalDate hoy = LocalDate.now(ZONA_CHILE);
                 LocalDate inicioMes = hoy.withDayOfMonth(1);
                 LocalDate inicioMesSiguiente = inicioMes.plusMonths(1);
@@ -119,7 +120,7 @@ public class InformeComprasService {
                                         .sum();
                 }
 
-                // 6. Formatear los valores en pesos chilenos.
+                // 6. Formatear los valores monetarios.
                 NumberFormat formatoCLP = NumberFormat.getNumberInstance(
                                 Locale.forLanguageTag("es-CL"));
 
@@ -127,45 +128,21 @@ public class InformeComprasService {
                 formatoCLP.setMinimumFractionDigits(0);
 
                 String totalFormateado = formatoCLP.format(totalVentas);
-
                 String periodo = inicioMes.format(FORMATO_PERIODO);
                 String fechaInicio = inicioMes.format(FORMATO_FECHA);
                 String fechaFin = hoy.format(FORMATO_FECHA);
 
-                // 7. Construir el informe actual para conservar
-                // el cálculo y los datos que devuelve el endpoint.
-                String cuerpoTexto = """
-                                COFFEE FLOWER
-                                INFORME MENSUAL DE VENTAS
+                // 7. Preparar los parámetros que usará la Lambda.
+                Map<String, Object> params = new HashMap<>();
+                params.put("desde", inicioMes.toString());
+                params.put("hasta", hoy.toString());
 
-                                Periodo: %s
-
-                                RESUMEN DEL MES
-                                Pedidos registrados: %d
-                                Unidades vendidas: %d
-                                Total de ventas: $%s CLP
-
-                                DETALLE DEL PERIODO
-                                Inicio del periodo: %s
-                                Cierre del informe: %s
-
-                                Gracias por confiar en Coffee Flower.
-                                Equipo Coffee Flower
-                                Informe generado automaticamente.
-                                """.formatted(
-                                periodo,
-                                pedidosMes.size(),
-                                totalUnidades,
-                                totalFormateado,
-                                fechaInicio,
-                                fechaFin);
-
-                // 8. Construir el JSON que espera la Lambda.
+                // 8. Crear el cuerpo de la solicitud con los campos obligatorios.
                 Map<String, Object> body = new HashMap<>();
+                body.put("requestId", UUID.randomUUID().toString());
+                body.put("requester", "coffee-flower-bff");
                 body.put("reportType", "monthly");
-                body.put("periodo", periodo);
-                body.put("fechaInicio", fechaInicio);
-                body.put("fechaFin", fechaFin);
+                body.put("params", params);
 
                 Map<String, Object> mensajeJson = new HashMap<>();
                 mensajeJson.put("type", "report.requested");
@@ -181,7 +158,7 @@ public class InformeComprasService {
                                         e);
                 }
 
-                // 9. Publicar la solicitud JSON en Amazon SNS.
+                // 9. Publicar la solicitud JSON en SNS.
                 PublishRequest solicitud = PublishRequest.builder()
                                 .topicArn(topicArn)
                                 .subject(
@@ -192,7 +169,7 @@ public class InformeComprasService {
 
                 PublishResponse respuesta = snsClient.publish(solicitud);
 
-                // 10. Crear la respuesta del endpoint.
+                // 10. Devolver el resultado del endpoint.
                 Map<String, Object> resultado = new HashMap<>();
 
                 resultado.put(
@@ -200,9 +177,12 @@ public class InformeComprasService {
                                 "Solicitud de informe publicada correctamente en Amazon SNS.");
 
                 resultado.put("periodo", periodo);
+                resultado.put("fechaInicio", fechaInicio);
+                resultado.put("fechaFin", fechaFin);
                 resultado.put("cantidadPedidos", pedidosMes.size());
                 resultado.put("unidadesVendidas", totalUnidades);
                 resultado.put("totalVentas", totalVentas);
+                resultado.put("totalVentasFormateado", totalFormateado);
                 resultado.put("snsMessageId", respuesta.messageId());
 
                 return resultado;
