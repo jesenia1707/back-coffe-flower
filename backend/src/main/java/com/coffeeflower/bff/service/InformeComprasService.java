@@ -53,19 +53,19 @@ public class InformeComprasService {
 
         /**
          * Calcula las ventas del mes actual
-         * y publica el informe mediante Amazon SNS.
+         * y publica el informe como texto plano mediante Amazon SNS.
          */
         @Transactional(readOnly = true)
         public Map<String, Object> generarYEnviarInformeMensual()
                         throws Exception {
 
-                // Verificar configuracion de SNS
+                // 1. Verificar configuracion de SNS
                 if (topicArn == null || topicArn.isBlank()) {
                         throw new IllegalStateException(
                                         "Falta configurar AWS_SNS_TOPIC_ARN.");
                 }
 
-                // Obtener fechas del mes actual
+                // 2. Obtener fechas del mes actual
                 LocalDate hoy = LocalDate.now(ZONA_CHILE);
                 LocalDate inicioMes = hoy.withDayOfMonth(1);
                 LocalDate inicioMesSiguiente = inicioMes.plusMonths(1);
@@ -78,7 +78,7 @@ public class InformeComprasService {
                                 .atStartOfDay(ZONA_CHILE)
                                 .toInstant();
 
-                // Obtener pedidos del mes
+                // 3. Obtener pedidos del mes
                 List<PedidoEntity> pedidosMes = pedidoRepository.findAll()
                                 .stream()
                                 .filter(pedido -> pedido.getCreadoEn() != null)
@@ -95,21 +95,18 @@ public class InformeComprasService {
                                                                                 .equalsIgnoreCase("CANCELLED")))
                                 .toList();
 
-                // Calcular total de ventas
+                // 4. Calcular total de ventas
                 BigDecimal totalVentas = pedidosMes.stream()
                                 .map(PedidoEntity::getTotal)
                                 .filter(total -> total != null)
-                                .reduce(
-                                                BigDecimal.ZERO,
-                                                BigDecimal::add);
+                                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-                // Calcular unidades vendidas
+                // 5. Calcular unidades vendidas
                 int totalUnidades = 0;
 
                 for (PedidoEntity pedido : pedidosMes) {
 
-                        List<PedidoItemEntity> items = itemRepository.findByPedidoId(
-                                        pedido.getId());
+                        List<PedidoItemEntity> items = itemRepository.findByPedidoId(pedido.getId());
 
                         totalUnidades += items.stream()
                                         .mapToInt(item -> item.getCantidad() == null
@@ -118,7 +115,7 @@ public class InformeComprasService {
                                         .sum();
                 }
 
-                // Formatear valores en pesos chilenos
+                // 6. Formatear valores en pesos chilenos
                 NumberFormat formatoCLP = NumberFormat.getNumberInstance(
                                 Locale.forLanguageTag("es-CL"));
 
@@ -128,33 +125,26 @@ public class InformeComprasService {
                 String totalFormateado = formatoCLP.format(totalVentas);
 
                 String periodo = inicioMes.format(FORMATO_PERIODO);
-
                 String fechaInicio = inicioMes.format(FORMATO_FECHA);
-
                 String fechaFin = hoy.format(FORMATO_FECHA);
 
-                // Crear informe en TEXTO PLANO
-                String cuerpo = """
-                                INFORME MENSUAL DE VENTAS
+                // 7. Construir el informe en texto plano
+                String cuerpoTexto = """
                                 COFFEE FLOWER
-                                ==============================
+                                INFORME MENSUAL DE VENTAS
 
                                 Periodo: %s
 
                                 RESUMEN DEL MES
-                                ------------------------------
                                 Pedidos registrados: %d
                                 Unidades vendidas: %d
                                 Total de ventas: $%s CLP
 
                                 DETALLE DEL PERIODO
-                                ------------------------------
                                 Inicio del periodo: %s
                                 Cierre del informe: %s
 
-                                ==============================
                                 Gracias por confiar en Coffee Flower.
-
                                 Equipo Coffee Flower
                                 Informe generado automaticamente.
                                 """.formatted(
@@ -165,43 +155,29 @@ public class InformeComprasService {
                                 fechaInicio,
                                 fechaFin);
 
-                // Publicar informe en Amazon SNS
+                // 8. Publicar directamente el texto plano en Amazon SNS
                 PublishRequest solicitud = PublishRequest.builder()
                                 .topicArn(topicArn)
                                 .subject(
                                                 "Coffee Flower - Informe mensual de ventas - "
                                                                 + periodo)
-                                .message(cuerpo)
+                                .message(cuerpoTexto)
                                 .build();
 
                 PublishResponse respuesta = snsClient.publish(solicitud);
 
-                // Crear respuesta del endpoint
+                // 9. Crear respuesta del endpoint
                 Map<String, Object> resultado = new HashMap<>();
 
                 resultado.put(
                                 "mensaje",
                                 "Informe mensual publicado correctamente en Amazon SNS.");
 
-                resultado.put(
-                                "periodo",
-                                periodo);
-
-                resultado.put(
-                                "cantidadPedidos",
-                                pedidosMes.size());
-
-                resultado.put(
-                                "unidadesVendidas",
-                                totalUnidades);
-
-                resultado.put(
-                                "totalVentas",
-                                totalVentas);
-
-                resultado.put(
-                                "snsMessageId",
-                                respuesta.messageId());
+                resultado.put("periodo", periodo);
+                resultado.put("cantidadPedidos", pedidosMes.size());
+                resultado.put("unidadesVendidas", totalUnidades);
+                resultado.put("totalVentas", totalVentas);
+                resultado.put("snsMessageId", respuesta.messageId());
 
                 return resultado;
         }
