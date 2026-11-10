@@ -22,20 +22,24 @@ import java.util.Map;
 @Service
 public class PedidoService {
 
-    private static final Logger log = LoggerFactory.getLogger(PedidoService.class);
+    private static final Logger log =
+            LoggerFactory.getLogger(PedidoService.class);
 
     private final PedidoRepository pedidoRepository;
     private final PedidoItemRepository pedidoItemRepository;
     private final PedidoSnsService pedidoSnsService;
+    private final PedidoKafkaService pedidoKafkaService;
 
     public PedidoService(
             PedidoRepository pedidoRepository,
             PedidoItemRepository pedidoItemRepository,
-            PedidoSnsService pedidoSnsService) {
+            PedidoSnsService pedidoSnsService,
+            PedidoKafkaService pedidoKafkaService) {
 
         this.pedidoRepository = pedidoRepository;
         this.pedidoItemRepository = pedidoItemRepository;
         this.pedidoSnsService = pedidoSnsService;
+        this.pedidoKafkaService = pedidoKafkaService;
     }
 
     @Transactional
@@ -64,9 +68,11 @@ public class PedidoService {
         pedido.setTotal(total);
         pedido.setEstado("RECIBIDO");
 
-        PedidoEntity guardado = pedidoRepository.saveAndFlush(pedido);
+        PedidoEntity guardado =
+                pedidoRepository.saveAndFlush(pedido);
 
         for (PedidoItemEntity item : items) {
+
             if (item == null) {
                 throw new IllegalArgumentException(
                         "El pedido contiene un producto inválido");
@@ -75,46 +81,82 @@ public class PedidoService {
             item.setPedido(guardado);
         }
 
-        List<PedidoItemEntity> itemsGuardados = pedidoItemRepository.saveAll(items);
+        List<PedidoItemEntity> itemsGuardados =
+                pedidoItemRepository.saveAll(items);
 
         pedidoItemRepository.flush();
 
-        // Construir el evento mientras los datos están disponibles.
-        Map<String, Object> eventoPedido = new LinkedHashMap<>();
+        // Construir el evento del pedido.
+        Map<String, Object> eventoPedido =
+                new LinkedHashMap<>();
+
         eventoPedido.put("id", guardado.getId());
         eventoPedido.put("cliente", guardado.getCliente());
         eventoPedido.put("total", guardado.getTotal());
         eventoPedido.put("estado", guardado.getEstado());
         eventoPedido.put("creadoEn", guardado.getCreadoEn());
+        eventoPedido.put("origen", "coffee-flower");
 
-        List<Map<String, Object>> productos = itemsGuardados.stream()
-                .map(item -> {
-                    Map<String, Object> producto = new LinkedHashMap<>();
-                    producto.put("productoId", item.getProductoId());
-                    producto.put("nombre", item.getNombre());
-                    producto.put("cantidad", item.getCantidad());
-                    producto.put("precio", item.getPrecio());
-                    return producto;
-                })
-                .toList();
+        List<Map<String, Object>> productos =
+                itemsGuardados.stream()
+                        .map(item -> {
+                            Map<String, Object> producto =
+                                    new LinkedHashMap<>();
+
+                            producto.put("productoId",
+                                    item.getProductoId());
+                            producto.put("nombre",
+                                    item.getNombre());
+                            producto.put("cantidad",
+                                    item.getCantidad());
+                            producto.put("precio",
+                                    item.getPrecio());
+
+                            return producto;
+                        })
+                        .toList();
 
         eventoPedido.put("items", productos);
 
+        // Publicar solamente después de confirmar la transacción.
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
+
                     @Override
                     public void afterCommit() {
+
+                        // Publicación en Amazon SNS.
                         try {
-                            pedidoSnsService.publicarPedido(eventoPedido);
+
+                            pedidoSnsService.publicarPedido(
+                                    eventoPedido);
 
                             log.info(
-                                    "Evento SNS publicado para el pedido {} con {} productos",
-                                    guardado.getId(),
-                                    productos.size());
+                                    "Evento SNS publicado para el pedido {}",
+                                    guardado.getId());
 
                         } catch (Exception e) {
+
                             log.error(
-                                    "El pedido {} se guardó, pero falló la publicación en SNS",
+                                    "Error publicando pedido {} en SNS",
+                                    guardado.getId(),
+                                    e);
+                        }
+
+                        // Publicación en Apache Kafka.
+                        try {
+
+                            pedidoKafkaService.publicarPedido(
+                                    eventoPedido);
+
+                            log.info(
+                                    "Evento Kafka enviado para el pedido {}",
+                                    guardado.getId());
+
+                        } catch (Exception e) {
+
+                            log.error(
+                                    "Error publicando pedido {} en Kafka",
                                     guardado.getId(),
                                     e);
                         }
