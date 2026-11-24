@@ -22,6 +22,7 @@ Sus responsabilidades incluyen:
 | Spring Boot 3.4.4 | Framework del backend |
 | Spring Data JPA | Acceso y persistencia de datos |
 | PostgreSQL | Base de datos |
+| Apache Kafka | Publicación de eventos en el tópico `pagos` (productor) |
 | Amazon SNS | Publicación de mensajes y notificaciones |
 | Docker | Contenerización de la aplicación |
 | Git y GitHub | Control de versiones |
@@ -41,12 +42,22 @@ Backend BFF - Spring Boot
         +------> PostgreSQL
         |
         +------> Amazon SNS
+        |            |
+        |            v
+        |     Flujo de notificaciones
+        |     SNS / SQS / Lambda
+        |     (integración por verificar)
+        |
+        +------> Kafka (tópico "pagos")
                      |
                      v
-              Flujo de notificaciones
-              SNS / SQS / Lambda
-              (integración por verificar)
+              consumers del stack ec2-stack
+              (analiticas / notificaciones / pagos)
 ```
+
+El BFF reemplazó al antiguo servicio `api` de `ec2-stack`: expone `/health` y
+`/topic-test` además de sus endpoints propios, y publica en Kafka con el mismo
+formato de mensaje (`{"mensaje","origen","fecha"}`).
 
 **Nota:** la integración final de SQS y Lambda para procesar y enviar el informe en HTML se encuentra pendiente de validación.
 
@@ -74,6 +85,13 @@ El servicio prepara una plantilla HTML con una presentación visual en tonos caf
 | Ruta | `/api/reportes/compras` |
 | Puerto local | `8080` |
 | Función | Generar y publicar el informe mensual |
+
+Endpoints incorporados desde el antiguo servicio `api`:
+
+| Método | Ruta | Función |
+|---|---|---|
+| `GET` | `/health` | Health check del stack (`{"status":"OK"}`) |
+| `GET` | `/topic-test?msj=test` | Publica en Kafka (`pagos`) y responde topic/partición/offset |
 
 ### Ejemplo de solicitud
 
@@ -135,8 +153,14 @@ Configura las variables que utiliza la aplicación:
 | `SNS_TOPIC_ARN` | Variable alternativa para el tema SNS |
 | `FRONTEND_ORIGIN` | Origen permitido del frontend |
 | `GATEWAY_SECRET` | Secreto del gateway, si la aplicación lo requiere |
+| `KAFKA_BOOTSTRAP_SERVERS` | Broker Kafka (en el stack: `kafka:9092`) |
+| `KAFKA_TOPIC` | Tópico productor (default: `pagos`) |
+| `KAFKA_ORIGEN` | Campo `origen` del mensaje (default: `api`, por compatibilidad) |
+| `MAIL_HOST` / `MAIL_PORT` | SMTP del informe (defaults: office365 / 587) |
+| `MAIL_USERNAME` / `MAIL_PASSWORD` | Credenciales SMTP (antes escritas en `application.properties`) |
+| `INFORME_EMAIL_DESTINO` | Destinatario del informe mensual |
 
-El servicio de informes busca primero `AWS_SNS_TOPIC_ARN` y, si no está definida, utiliza `SNS_TOPIC_ARN`.
+El servicio de informes busca primero `AWS_SNS_TOPIC_ARN` y, si no está definida, utiliza `SNS_TOPIC_ARN`. En `ec2-stack` todas estas variables se entregan al contenedor mediante `env_file: .env` (ver `.env.example` de ese repositorio).
 
 **Seguridad:** no publiques contraseñas, tokens, secretos ni archivos `.env` en GitHub.
 
@@ -244,8 +268,10 @@ src/main/java/com/coffeeflower/bff/
 ├── config/
 │   └── SnsConfig.java
 ├── controller/
+│   ├── HealthController.java
 │   ├── PedidosController.java
-│   └── ProductController.java
+│   ├── ProductController.java
+│   └── TopicTestController.java
 ├── model/
 │   ├── PedidoEntity.java
 │   ├── PedidoItemEntity.java
@@ -254,7 +280,8 @@ src/main/java/com/coffeeflower/bff/
 │   ├── PedidoRepository.java
 │   └── PedidoItemRepository.java
 └── service/
-    └── InformeComprasService.java
+    ├── InformeComprasService.java
+    └── KafkaPagosService.java
 ```
 
 Esta estructura representa los componentes identificados en el código compartido; pueden existir otros controladores, modelos, repositorios y servicios en el proyecto.
